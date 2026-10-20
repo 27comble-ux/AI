@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FPV Red Triplane - Dogfight & Evade</title>
+  <!-- Official A-Frame 1.6.0 Library -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+      background-color: #7ec0ee;
+    }
+
+    /* Score Counter HUD Overlay */
+    #score-box {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 15, 22, 0.88);
+      border: 2px solid #ff3333;
+      color: #ffffff;
+      padding: 10px 28px;
+      border-radius: 30px;
+      font-size: 26px;
+      font-weight: 800;
+      z-index: 100;
+      pointer-events: none;
+      letter-spacing: 1.5px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), inset 0 0 10px rgba(255, 51, 51, 0.25);
+      text-transform: uppercase;
+    }
+
+    /* Start & Game Over Screen Overlay */
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle, rgba(20, 20, 30, 0.88) 0%, rgba(5, 5, 10, 0.96) 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 200;
+      color: #ffffff;
+      text-align: center;
+      padding: 24px;
+      backdrop-filter: blur(6px);
+    }
+
+    #overlay h1 {
+      font-size: 42px;
+      color: #ff3333;
+      margin-bottom: 12px;
+      text-shadow: 0 0 15px rgba(255, 51, 51, 0.6), 2px 2px 4px #000;
+      letter-spacing: 3px;
+      font-weight: 900;
+    }
+
+    #overlay p {
+      font-size: 17px;
+      margin-bottom: 28px;
+      line-height: 1.6;
+      max-width: 620px;
+      color: #d1d5db;
+    }
+
+    #start-btn {
+      padding: 16px 42px;
+      font-size: 22px;
+      font-weight: 800;
+      color: #ffffff;
+      background: linear-gradient(135deg, #ff3333 0%, #b30000 100%);
+      border: 2px solid #ff6666;
+      border-radius: 35px;
+      cursor: pointer;
+      box-shadow: 0 6px 20px rgba(255, 51, 51, 0.4);
+      transition: all 0.2s ease-in-out;
+      letter-spacing: 1px;
+    }
+
+    #start-btn:hover {
+      background: linear-gradient(135deg, #ff5555 0%, #cc0000 100%);
+      transform: scale(1.06);
+      box-shadow: 0 8px 25px rgba(255, 51, 51, 0.6);
+    }
+
+    #start-btn:active {
+      transform: scale(0.98);
+    }
+
+    /* Tactical HUD Legend */
+    .legend {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      font-size: 14px;
+      color: #ffcc00;
+    }
+  </style>
+
+  <script>
+    // Game State Variables
+    let gameActive = false;
+    let isExploding = false;
+    let explosionTimer = 0;
+
+    let planeY = 8.0; // Start Altitude
+    let currentPitch = 0;
+    const flySpeed = 0.125;
+    let score = 0;
+    let propAngle = 0;
+
+    // Pool of 10 Standalone Independent Obstacles (Barrage Balloons & Sopwith Camels)
+    const obstacles = [
+      { id: 'obs1',  type: 'balloon', x: 16, baseY: 8.5, y: 8.5, phase: 0,   passed: false },
+      { id: 'obs2',  type: 'camel',   x: 23, baseY: 6.5, y: 6.5, phase: 0.8, passed: false },
+      { id: 'obs3',  type: 'balloon', x: 30, baseY: 9.5, y: 9.5, phase: 0,   passed: false },
+      { id: 'obs4',  type: 'camel',   x: 37, baseY: 7.5, y: 7.5, phase: 2.1, passed: false },
+      { id: 'obs5',  type: 'camel',   x: 44, baseY: 8.0, y: 8.0, phase: 3.5, passed: false },
+      { id: 'obs6',  type: 'balloon', x: 51, baseY: 6.0, y: 6.0, phase: 0,   passed: false },
+      { id: 'obs7',  type: 'camel',   x: 58, baseY: 9.0, y: 9.0, phase: 1.2, passed: false },
+      { id: 'obs8',  type: 'balloon', x: 65, baseY: 10.0, y: 10.0, phase: 0, passed: false },
+      { id: 'obs9',  type: 'camel',   x: 72, baseY: 7.0, y: 7.0, phase: 4.0, passed: false },
+      { id: 'obs10', type: 'balloon', x: 79, baseY: 8.5, y: 8.5, phase: 0,   passed: false }
+    ];
+
+    // Particle Physics Array
+    const explosionParticles = [];
+
+    // Keyboard Controller
+    const keys = {};
+    window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+    window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+    // Quest VR Controller Event Listeners
+    window.addEventListener('triggerdown', () => { if (!gameActive && !isExploding) startGame(); });
+    window.addEventListener('abuttondown', () => { if (!gameActive && !isExploding) startGame(); });
+    window.addEventListener('xbuttondown', () => { if (!gameActive && !isExploding) startGame(); });
+
+    // Reset obstacle position & randomize patrol parameters inside visible flight corridor
+    function resetObstacle(obs, startX) {
+      obs.x = startX;
+      obs.baseY = 4.2 + Math.random() * 5.8;
+      obs.y = obs.baseY;
+      obs.phase = Math.random() * Math.PI * 2;
+      obs.passed = false;
+    }
+
+    // Spawn 3D Low-Poly Forest Trees for Terrain Alt Reference
+    function spawnTrees() {
+      const scene = document.querySelector('a-scene');
+      if (!scene) return;
+
+      const treeContainer = document.createElement('a-entity');
+      treeContainer.setAttribute('id', 'forest-container');
+
+      for (let i = 0; i < 60; i++) {
+        const tree = document.createElement('a-entity');
+        const x = -30 + Math.random() * 200;
+        const z = (Math.random() > 0.5 ? 1 : -1) * (4 + Math.random() * 60);
+        const scale = 0.6 + Math.random() * 0.7;
+
+        tree.setAttribute('position', `${x} 1.0 ${z}`);
+        tree.setAttribute('scale', `${scale} ${scale} ${scale}`);
+
+        // Tree Trunk
+        const trunk = document.createElement('a-cylinder');
+        trunk.setAttribute('position', '0 0.8 0');
+        trunk.setAttribute('radius', '0.25');
+        trunk.setAttribute('height', '1.6');
+        trunk.setAttribute('color', '#4a2e12');
+
+        // Foliage Layer 1
+        const cone1 = document.createElement('a-cone');
+        cone1.setAttribute('position', '0 2.2 0');
+        cone1.setAttribute('radius-bottom', '1.2');
+        cone1.setAttribute('radius-top', '0.1');
+        cone1.setAttribute('height', '1.8');
+        cone1.setAttribute('color', '#1e4620');
+
+        // Foliage Layer 2
+        const cone2 = document.createElement('a-cone');
+        cone2.setAttribute('position', '0 3.2 0');
+        cone2.setAttribute('radius-bottom', '0.9');
+        cone2.setAttribute('radius-top', '0.05');
+        cone2.setAttribute('height', '1.5');
+        cone2.setAttribute('color', '#2a5a2d');
+
+        tree.appendChild(trunk);
+        tree.appendChild(cone1);
+        tree.appendChild(cone2);
+        treeContainer.appendChild(tree);
+      }
+      scene.appendChild(treeContainer);
+    }
+
+    // Trigger Mid-Air Particle Explosion Effect
+    function triggerExplosion() {
+      gameActive = false;
+      isExploding = true;
+      explosionTimer = 0;
+
+      const planeModel = document.getElementById('triplane-model');
+      if (planeModel) planeModel.setAttribute('visible', 'false');
+
+      const expGroup = document.getElementById('explosion-group');
+      if (expGroup) {
+        expGroup.setAttribute('position', `-3 ${planeY} 0`);
+        expGroup.setAttribute('visible', 'true');
+      }
+
+      const particles = document.querySelectorAll('.exp-particle');
+      particles.forEach((p, index) => {
+        p.setAttribute('position', '0 0 0');
+        p.setAttribute('scale', '1 1 1');
+        explosionParticles[index] = {
+          vx: (Math.random() - 0.5) * 0.35,
+          vy: (Math.random() - 0.5) * 0.35,
+          vz: (Math.random() - 0.5) * 0.35,
+          scale: 1.0 + Math.random() * 0.6
+        };
+      });
+    }
+
+    // Initialize/Restart Match
+    function startGame() {
+      planeY = 8.0; // Reset to center corridor altitude
+      currentPitch = 0;
+      score = 0;
+      isExploding = false;
+
+      const scoreVal = document.getElementById('score-val');
+      if (scoreVal) scoreVal.innerText = '0';
+
+      const planeModel = document.getElementById('triplane-model');
+      if (planeModel) planeModel.setAttribute('visible', 'true');
+
+      const expGroup = document.getElementById('explosion-group');
+      if (expGroup) expGroup.setAttribute('visible', 'false');
+
+      // Reset all 10 obstacles ahead with staggered distances
+      obstacles.forEach((obs, index) => {
+        resetObstacle(obs, 16 + index * 7);
+      });
+
+      const overlay = document.getElementById('overlay');
+      if (overlay) overlay.style.display = 'none';
+
+      gameActive = true;
+    }
+
+    // Game Over Handler
+    function gameOver() {
+      isExploding = false;
+      gameActive = false;
+
+      const titleText = document.getElementById('title-text');
+      const descText = document.getElementById('desc-text');
+      const startBtn = document.getElementById('start-btn');
+      const overlay = document.getElementById('overlay');
+
+      if (titleText) titleText.innerText = "CRASHED!";
+      if (descText) descText.innerHTML = `Your triplane exploded in combat!<br>Final Score: <b>${score}</b>`;
+      if (startBtn) startBtn.innerText = "FLY AGAIN";
+      if (overlay) overlay.style.display = 'flex';
+    }
+
+    // Register Custom A-Frame Engine Component
+    if (typeof AFRAME !== 'undefined') {
+      AFRAME.registerComponent('flappy-game', {
+        init: function() {
+          this.gameTime = 0;
+          spawnTrees();
+        },
+        tick: function () {
+          // Handle Particle Explosion Dynamic Animation
+          if (isExploding) {
+            explosionTimer++;
+            const particles = document.querySelectorAll('.exp-particle');
+            particles.forEach((p, index) => {
+              const data = explosionParticles[index];
+              if (data) {
+                let pos = p.getAttribute('position');
+                pos.x += data.vx;
+                pos.y += data.vy;
+                pos.z += data.vz;
+                p.setAttribute('position', pos);
+
+                data.scale += 0.035;
+                p.setAttribute('scale', `${data.scale} ${data.scale} ${data.scale}`);
+              }
+            });
+
+            if (explosionTimer > 50) {
+              gameOver();
+            }
+            return;
+          }
+
+          // Quest 3 VR Controller Input Handler
+          let vrClimb = false;
+          let vrDescend = false;
+
+          if (navigator.getGamepads) {
+            const gamepads = navigator.getGamepads();
+            for (let i = 0; i < gamepads.length; i++) {
+              const gp = gamepads[i];
+              if (gp && gp.axes) {
+                for (let a = 1; a < gp.axes.length; a += 2) {
+                  if (gp.axes[a] < -0.25) vrClimb = true;
+                  if (gp.axes[a] > 0.25) vrDescend = true;
+                }
+                if (gp.buttons) {
+                  for (let b = 0; b < gp.buttons.length; b++) {
+                    if (gp.buttons[b] && gp.buttons[b].pressed) {
+                      if (!gameActive && !isExploding) {
+                        startGame();
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (!gameActive) return;
+
+          this.gameTime += 0.03; // Time ticker for sine wave movement
+
+          const plane = document.getElementById('triplane');
+          const prop = document.getElementById('propeller');
+          const scoreVal = document.getElementById('score-val');
+
+          // Spin Engine Propeller
+          propAngle += 36;
+          if (prop) prop.setAttribute('rotation', `${propAngle} 0 0`);
+
+          let targetPitch = 0;
+
+          // Pitch Control Logic (W / Up Arrow / Quest 3 Thumbstick Up = Climb, S / Down Arrow / Quest 3 Thumbstick Down = Descend)
+          if (keys['KeyW'] || keys['ArrowUp'] || vrClimb) {
+            planeY += flySpeed;
+            targetPitch = 18;
+          } else if (keys['KeyS'] || keys['ArrowDown'] || vrDescend) {
+            planeY -= flySpeed;
+            targetPitch = -18;
+          } else {
+            targetPitch = 0;
+          }
+
+          // Smooth Pitch Interpolation
+          currentPitch += (targetPitch - currentPitch) * 0.15;
+
+          if (plane) {
+            plane.setAttribute('position', `-3 ${planeY} 0`);
+            plane.setAttribute('rotation', `0 0 ${currentPitch}`);
+          }
+
+          // Lenient Ground Collision Bounds (Ground Y=1.0, Crash Threshold Y <= 1.8, Sky Ceiling Y=13.0)
+          if (planeY <= 1.8 || planeY >= 12.2) {
+            triggerExplosion();
+            return;
+          }
+
+          // Update All 10 Obstacles (Movement, Sine Wave Patrol, Collisions & Recycling)
+          for (let i = 0; i < obstacles.length; i++) {
+            let obs = obstacles[i];
+            obs.x -= 0.095; // Forward flight velocity
+
+            // Sopwith Camels execute a smooth sine wave patrol flight up & down
+            if (obs.type === 'camel') {
+              const patrolAmp = 1.0; // Vertical patrol amplitude
+              const patrolFreq = 1.4; // Patrol cycle frequency
+              obs.y = obs.baseY + Math.sin(this.gameTime * patrolFreq + obs.phase) * patrolAmp;
+              
+              // Enemy Camel Pitch Alignment: Nose UP when ascending, Nose DOWN when descending
+              obs.pitch = -Math.cos(this.gameTime * patrolFreq + obs.phase) * 14; 
+            }
+
+            const el = document.getElementById(obs.id);
+            if (el) {
+              el.setAttribute('position', `${obs.x} ${obs.y} 0`);
+              if (obs.type === 'camel') {
+                el.setAttribute('rotation', `0 0 ${obs.pitch || 0}`);
+              }
+            }
+
+            // Award point when obstacle passed safely
+            if (!obs.passed && obs.x < -3) {
+              obs.passed = true;
+              score++;
+              if (scoreVal) scoreVal.innerText = score;
+            }
+
+            // Precision Hitbox Collision Detection
+            if (Math.abs(obs.x - (-3)) < 1.1) {
+              if (obs.type === 'camel') {
+                // Sopwith Camel Mid-Air Dogfight Hitbox
+                if (Math.abs(planeY - obs.y) < 1.1) {
+                  triggerExplosion();
+                  return;
+                }
+              } else if (obs.type === 'balloon') {
+                // Barrage Balloon Sphere Hitbox (Tether cable explicitly NON-COLLIDING!)
+                if (Math.abs(planeY - obs.y) < 1.3) {
+                  triggerExplosion();
+                  return;
+                }
+              }
+            }
+
+            // Recycle off-screen obstacles far ahead with seamless flow
+            if (obs.x < -10) {
+              let furthestX = Math.max(...obstacles.map(item => item.x));
+              resetObstacle(obs, furthestX + (6.5 + Math.random() * 4));
+            }
+          }
+        }
+      });
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Score Board HUD -->
+  <div id="score-box">SCORE: <span id="score-val">0</span></div>
+
+  <!-- Start / Game Over Modal Screen -->
+  <div id="overlay">
+    <h1 id="title-text">FPV RED TRIPLANE</h1>
+    <p id="desc-text">
+      <b>DESKTOP:</b> <b>W / Up Arrow</b> = Climb | <b>S / Down Arrow</b> = Descend | Drag Mouse = 360° Look<br>
+      <b>META QUEST 3 VR:</b> <b>Thumbstick Up / Down</b> = Climb / Descend | Headset = 360° Look<br>
+      <b>VR Buttons:</b> Press <b>Trigger / A / X</b> to Start or Fly Again<br>
+      <span class="legend">⚠️ Dodge the enemies! Keep your plane low to increase visibility! ⚠️</span><br>
+      <i>(Tether cables under barrage balloons are non-colliding)</i>
+    </p>
+    <button id="start-btn" onclick="startGame()">START GAME</button>
+  </div>
+
+  <!-- A-Frame 3D Scene -->
+  <a-scene flappy-game vr-mode-ui="enabled: true">
+    
+    <!-- Meta Quest 3 Controllers -->
+    <a-entity id="left-controller" oculus-touch-controls="hand: left"></a-entity>
+    <a-entity id="right-controller" oculus-touch-controls="hand: right" laser-controls="hand: right"></a-entity>
+
+    <!-- Sky & World Lighting -->
+    <a-sky color="#7ec0ee"></a-sky>
+    <a-light type="ambient" color="#ffffff" intensity="0.85"></a-light>
+    <a-light type="directional" position="12 24 10" intensity="0.65"></a-light>
+
+    <!-- Ground Landscape (Lowered to Y = 1.0) -->
+    <a-plane position="50 1.0 0" rotation="-90 0 0" width="350" height="200" color="#3a5f0b"></a-plane>
+
+    <!-- Translucent White Sky Limit Plane (Positioned at Y = 13.0) -->
+    <a-plane position="50 13.0 0" rotation="90 0 0" width="350" height="200" material="color: #ffffff; transparent: true; opacity: 0.35; side: double"></a-plane>
+
+    <!-- Background Clouds -->
+    <a-sphere position="10 18 -15" radius="5" color="#ffffff"></a-sphere>
+    <a-sphere position="38 22 14" radius="6" color="#ffffff"></a-sphere>
+    <a-sphere position="68 19 -12" radius="5.5" color="#ffffff"></a-sphere>
+
+    <!-- PLAYER RED TRIPLANE ENTITY -->
+    <a-entity id="triplane" position="-3 8 0">
+      
+      <!-- FPV PILOT CAMERA: DEEP LOW COCKPIT SEAT AT Y = 0.08
+           near="0.001" eliminates near-plane clipping when looking around.
+           rotation="0 -90 0" faces forward down the hood & twin machine guns. -->
+      <a-entity position="-0.0 -1.25 0" rotation="0 -90 0">
+        <a-camera near="0.001" look-controls="pointerLockEnabled: false" wasd-controls="enabled: false"></a-camera>
+      </a-entity>
+
+      <!-- Red Triplane Detailed Geometry Model -->
+      <a-entity id="triplane-model">
+        <!-- Cockpit Floor & Side Walls -->
+        <a-box position="-0.05 -0.01 0" width="0.45" height="0.02" depth="0.32" color="#111111"></a-box>
+        <a-box position="-0.05 0.08 0.16" width="0.45" height="0.14" depth="0.02" color="#b30000"></a-box>
+        <a-box position="-0.05 0.08 -0.16" width="0.45" height="0.14" depth="0.02" color="#b30000"></a-box>
+        <!-- Cockpit Front Dashboard -->
+        <a-box position="0.18 0.12 0" width="0.02" height="0.1" depth="0.3" color="#222222"></a-box>
+
+        <!-- Front Fuselage Engine Hood (Shorter Nose) -->
+        <a-box position="0.30 0.01 0" width="0.5" height="0.18" depth="0.34" color="#cc0000"></a-box>
+        <!-- Rear Fuselage Tail Section -->
+        <a-box position="-0.6 0.01 0" width="0.7" height="0.18" depth="0.32" color="#cc0000"></a-box>
+
+        <!-- Twin Spandau Machine Gun Barrels on Engine Hood -->
+        <a-cylinder position="0.25 0.14 0.07" rotation="0 0 90" radius="0.018" height="0.30" color="#111111"></a-cylinder>
+        <a-cylinder position="0.25 0.14 -0.07" rotation="0 0 90" radius="0.018" height="0.30" color="#111111"></a-cylinder>
+
+        <!-- Engine Cowl Nose (Pulled back for shorter profile) -->
+        <a-cylinder position="0.60 0 0" radius="0.24" height="0.2" rotation="0 0 90" color="#222222"></a-cylinder>
+        
+        <!-- Spinning Propeller Assembly (Shifted to match shorter cowl) -->
+        <a-entity id="propeller" position="0.72 0 0">
+          <a-box position="0 0 0" width="0.02" height="1.15" depth="0.08" color="#d4a373"></a-box>
+          <a-box position="0 0 0" width="0.02" height="0.08" depth="1.15" color="#d4a373"></a-box>
+          <a-cylinder position="0.01 0 0" radius="0.09" height="0.03" rotation="0 0 90" color="#111111"></a-cylinder>
+        </a-entity>
+        
+        <!-- TRIPLE WINGS CONFIGURATION -->
+        <!-- 1. Top Wing Split Layout (Y = 0.55) -->
+        <!-- Solid Left Top Wing Panel -->
+        <a-box position="0.3 0.55 -0.675" width="0.45" height="0.04" depth="0.85" color="#b30000"></a-box>
+        <!-- Semi-Transparent Center Cutout Section Directly Above Pilot -->
+        <a-box position="0.3 0.55 0" width="0.45" height="0.04" depth="0.5" material="color: #b30000; transparent: true; opacity: 0.38"></a-box>
+        <!-- Solid Right Top Wing Panel -->
+        <a-box position="0.3 0.55 0.675" width="0.45" height="0.04" depth="0.85" color="#b30000"></a-box>
+
+        <!-- 2. Middle Wing (Y = 0.15) -->
+        <a-box position="0.2 0.15 0" width="0.45" height="0.04" depth="2.0" color="#b30000"></a-box>
+        <!-- 3. Bottom Wing (Y = -0.25) - Positioned under pilot's seat -->
+        <a-box position="0.1 -0.25 0" width="0.45" height="0.04" depth="1.8" color="#b30000"></a-box>
+        
+        <!-- Interplane Support Struts connecting all 3 wings -->
+        <a-box position="0.25 0.15 0.8" width="0.03" height="0.84" depth="0.03" color="#111111"></a-box>
+        <a-box position="0.25 0.15 -0.8" width="0.03" height="0.84" depth="0.03" color="#111111"></a-box>
+
+        <!-- Tail Fin & Horizontal Stabilizer -->
+        <a-box position="-0.85 0.28 0" width="0.4" height="0.38" depth="0.03" color="#cc0000"></a-box>
+        <a-box position="-0.85 0 0" width="0.3" height="0.03" depth="0.8" color="#cc0000"></a-box>
+      </a-entity>
+    </a-entity>
+
+    <!-- DYNAMIC PARTICLE EXPLOSION GROUP -->
+    <a-entity id="explosion-group" position="-3 8 0" visible="false">
+      <a-sphere class="exp-particle" radius="0.4" color="#ff2200"></a-sphere>
+      <a-sphere class="exp-particle" radius="0.5" color="#ff7700"></a-sphere>
+      <a-sphere class="exp-particle" radius="0.6" color="#ffbb00"></a-sphere>
+      <a-sphere class="exp-particle" radius="0.4" color="#333333"></a-sphere>
+      <a-box class="exp-particle" width="0.3" height="0.3" depth="0.3" color="#cc0000"></a-box>
+      <a-box class="exp-particle" width="0.4" height="0.1" depth="0.4" color="#b30000"></a-box>
+      <a-sphere class="exp-particle" radius="0.3" color="#ff4400"></a-sphere>
+      <a-sphere class="exp-particle" radius="0.5" color="#222222"></a-sphere>
+    </a-entity>
+
+    <!-- 10 INDEPENDENT STANDALONE OBSTACLES -->
+    
+    <!-- Obs 1: Barrage Balloon -->
+    <a-entity id="obs1" position="16 8.5 0">
+      <a-sphere position="0 0 0" radius="1.3" scale="1.6 1 1" color="#a0b0c0"></a-sphere>
+      <a-cone position="1.5 0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -60" color="#708090"></a-cone>
+      <a-cone position="1.5 -0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -120" color="#708090"></a-cone>
+      <a-cylinder position="0 -10 0" radius="0.025" height="20" color="#222222"></a-cylinder>
+    </a-entity>
+
+    <!-- Obs 2: Sopwith Camel Biplane (Patrols Sine Wave) -->
+    <a-entity id="obs2" position="23 6.5 0">
+      <a-box position="0 0 0" width="1.6" height="0.38" depth="0.38" color="#4b5320"></a-box>
+      <a-cylinder position="-0.85 0 0" radius="0.22" height="0.18" rotation="0 0 90" color="#333333"></a-cylinder>
+      <a-cylinder position="-0.96 0 0" radius="0.55" height="0.02" rotation="0 0 90" color="#cccccc" opacity="0.6"></a-cylinder>
+      <a-box position="-0.1 0.38 0" width="0.48" height="0.04" depth="2.2" color="#4b5320"></a-box>
+      <a-box position="-0.1 -0.15 0" width="0.48" height="0.04" depth="1.9" color="#4b5320"></a-box>
+      <a-cylinder position="-0.1 0.41 0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-cylinder position="-0.1 0.41 -0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-box position="0.7 0.05 0" width="0.5" height="0.28" depth="0.28" color="#4b5320"></a-box>
+      <a-box position="1.05 0.35 0" width="0.35" height="0.45" depth="0.03" color="#ffffff"></a-box>
+      <a-box position="1.05 0.35 0" width="0.12" height="0.45" depth="0.035" color="#00247d"></a-box>
+      <a-box position="1.00 0.08 0" width="0.3" height="0.03" depth="0.9" color="#4b5320"></a-box>
+    </a-entity>
+
+    <!-- Obs 3: Barrage Balloon -->
+    <a-entity id="obs3" position="30 9.5 0">
+      <a-sphere position="0 0 0" radius="1.3" scale="1.6 1 1" color="#a0b0c0"></a-sphere>
+      <a-cone position="1.5 0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -60" color="#708090"></a-cone>
+      <a-cone position="1.5 -0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -120" color="#708090"></a-cone>
+      <a-cylinder position="0 -10 0" radius="0.025" height="20" color="#222222"></a-cylinder>
+    </a-entity>
+
+    <!-- Obs 4: Sopwith Camel Biplane (Patrols Sine Wave) -->
+    <a-entity id="obs4" position="37 7.5 0">
+      <a-box position="0 0 0" width="1.6" height="0.38" depth="0.38" color="#4b5320"></a-box>
+      <a-cylinder position="-0.85 0 0" radius="0.22" height="0.18" rotation="0 0 90" color="#333333"></a-cylinder>
+      <a-cylinder position="-0.96 0 0" radius="0.55" height="0.02" rotation="0 0 90" color="#cccccc" opacity="0.6"></a-cylinder>
+      <a-box position="-0.1 0.38 0" width="0.48" height="0.04" depth="2.2" color="#4b5320"></a-box>
+      <a-box position="-0.1 -0.15 0" width="0.48" height="0.04" depth="1.9" color="#4b5320"></a-box>
+      <a-cylinder position="-0.1 0.41 0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-cylinder position="-0.1 0.41 -0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-box position="0.7 0.05 0" width="0.5" height="0.28" depth="0.28" color="#4b5320"></a-box>
+      <a-box position="1.05 0.35 0" width="0.35" height="0.45" depth="0.03" color="#ffffff"></a-box>
+      <a-box position="1.05 0.35 0" width="0.12" height="0.45" depth="0.035" color="#00247d"></a-box>
+      <a-box position="1.00 0.08 0" width="0.3" height="0.03" depth="0.9" color="#4b5320"></a-box>
+    </a-entity>
+
+    <!-- Obs 5: Sopwith Camel Biplane (Patrols Sine Wave) -->
+    <a-entity id="obs5" position="44 8.0 0">
+      <a-box position="0 0 0" width="1.6" height="0.38" depth="0.38" color="#4b5320"></a-box>
+      <a-cylinder position="-0.85 0 0" radius="0.22" height="0.18" rotation="0 0 90" color="#333333"></a-cylinder>
+      <a-cylinder position="-0.96 0 0" radius="0.55" height="0.02" rotation="0 0 90" color="#cccccc" opacity="0.6"></a-cylinder>
+      <a-box position="-0.1 0.38 0" width="0.48" height="0.04" depth="2.2" color="#4b5320"></a-box>
+      <a-box position="-0.1 -0.15 0" width="0.48" height="0.04" depth="1.9" color="#4b5320"></a-box>
+      <a-cylinder position="-0.1 0.41 0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-cylinder position="-0.1 0.41 -0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-box position="0.7 0.05 0" width="0.5" height="0.28" depth="0.28" color="#4b5320"></a-box>
+      <a-box position="1.05 0.35 0" width="0.35" height="0.45" depth="0.03" color="#ffffff"></a-box>
+      <a-box position="1.05 0.35 0" width="0.12" height="0.45" depth="0.035" color="#00247d"></a-box>
+      <a-box position="1.00 0.08 0" width="0.3" height="0.03" depth="0.9" color="#4b5320"></a-box>
+    </a-entity>
+
+    <!-- Obs 6: Barrage Balloon -->
+    <a-entity id="obs6" position="51 6.0 0">
+      <a-sphere position="0 0 0" radius="1.3" scale="1.6 1 1" color="#a0b0c0"></a-sphere>
+      <a-cone position="1.5 0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -60" color="#708090"></a-cone>
+      <a-cone position="1.5 -0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -120" color="#708090"></a-cone>
+      <a-cylinder position="0 -10 0" radius="0.025" height="20" color="#222222"></a-cylinder>
+    </a-entity>
+
+    <!-- Obs 7: Sopwith Camel Biplane (Patrols Sine Wave) -->
+    <a-entity id="obs7" position="58 9.0 0">
+      <a-box position="0 0 0" width="1.6" height="0.38" depth="0.38" color="#4b5320"></a-box>
+      <a-cylinder position="-0.85 0 0" radius="0.22" height="0.18" rotation="0 0 90" color="#333333"></a-cylinder>
+      <a-cylinder position="-0.96 0 0" radius="0.55" height="0.02" rotation="0 0 90" color="#cccccc" opacity="0.6"></a-cylinder>
+      <a-box position="-0.1 0.38 0" width="0.48" height="0.04" depth="2.2" color="#4b5320"></a-box>
+      <a-box position="-0.1 -0.15 0" width="0.48" height="0.04" depth="1.9" color="#4b5320"></a-box>
+      <a-cylinder position="-0.1 0.41 0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-cylinder position="-0.1 0.41 -0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-box position="0.7 0.05 0" width="0.5" height="0.28" depth="0.28" color="#4b5320"></a-box>
+      <a-box position="1.05 0.35 0" width="0.35" height="0.45" depth="0.03" color="#ffffff"></a-box>
+      <a-box position="1.05 0.35 0" width="0.12" height="0.45" depth="0.035" color="#00247d"></a-box>
+      <a-box position="1.00 0.08 0" width="0.3" height="0.03" depth="0.9" color="#4b5320"></a-box>
+    </a-entity>
+
+    <!-- Obs 8: Barrage Balloon -->
+    <a-entity id="obs8" position="65 10.0 0">
+      <a-sphere position="0 0 0" radius="1.3" scale="1.6 1 1" color="#a0b0c0"></a-sphere>
+      <a-cone position="1.5 0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -60" color="#708090"></a-cone>
+      <a-cone position="1.5 -0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -120" color="#708090"></a-cone>
+      <a-cylinder position="0 -10 0" radius="0.025" height="20" color="#222222"></a-cylinder>
+    </a-entity>
+
+    <!-- Obs 9: Sopwith Camel Biplane (Patrols Sine Wave) -->
+    <a-entity id="obs9" position="72 7.0 0">
+      <a-box position="0 0 0" width="1.6" height="0.38" depth="0.38" color="#4b5320"></a-box>
+      <a-cylinder position="-0.85 0 0" radius="0.22" height="0.18" rotation="0 0 90" color="#333333"></a-cylinder>
+      <a-cylinder position="-0.96 0 0" radius="0.55" height="0.02" rotation="0 0 90" color="#cccccc" opacity="0.6"></a-cylinder>
+      <a-box position="-0.1 0.38 0" width="0.48" height="0.04" depth="2.2" color="#4b5320"></a-box>
+      <a-box position="-0.1 -0.15 0" width="0.48" height="0.04" depth="1.9" color="#4b5320"></a-box>
+      <a-cylinder position="-0.1 0.41 0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-cylinder position="-0.1 0.41 -0.8" radius="0.22" height="0.01" color="#00247d"></a-cylinder>
+      <a-box position="0.7 0.05 0" width="0.5" height="0.28" depth="0.28" color="#4b5320"></a-box>
+      <a-box position="1.05 0.35 0" width="0.35" height="0.45" depth="0.03" color="#ffffff"></a-box>
+      <a-box position="1.05 0.35 0" width="0.12" height="0.45" depth="0.035" color="#00247d"></a-box>
+      <a-box position="1.00 0.08 0" width="0.3" height="0.03" depth="0.9" color="#4b5320"></a-box>
+    </a-entity>
+
+    <!-- Obs 10: Barrage Balloon -->
+    <a-entity id="obs10" position="79 8.5 0">
+      <a-sphere position="0 0 0" radius="1.3" scale="1.6 1 1" color="#a0b0c0"></a-sphere>
+      <a-cone position="1.5 0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -60" color="#708090"></a-cone>
+      <a-cone position="1.5 -0.6 0" radius-bottom="0.5" height="0.8" rotation="0 0 -120" color="#708090"></a-cone>
+      <a-cylinder position="0 -10 0" radius="0.025" height="20" color="#222222"></a-cylinder>
+    </a-entity>
+
+  </a-scene>
+
+</body>
+</html>
